@@ -1,0 +1,49 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: accounts
+    ports: ["5432:5432"]
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # mgmt UI
+  auth-service:
+    build: ./auth-service
+    environment:
+      JWT_SECRET: devsecret
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+    ports: ["8000:8000"]
+    depends_on: [rabbitmq]
+  account-service:
+    build: ./account-service
+    environment:
+      JWT_SECRET: devsecret
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/accounts
+      INTERNAL_TOKEN: internal-dev-token
+    ports: ["8001:8001"]
+    depends_on: [postgres]
+  transaction-service:
+    build: ./transaction-service
+    environment:
+      JWT_SECRET: devsecret
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    ports: ["8002:8002"]
+    depends_on: [rabbitmq]
+  ledger-service:
+    build: ./ledger-service
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      ACCOUNT_URL: http://account-service:8001
+      INTERNAL_TOKEN: internal-dev-token
+    ports: ["8003:8003"]
+    depends_on: [rabbitmq, account-service]
+  notification-service:
+    build: ./notification-service
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    ports: ["8004:8004"]
+    depends_on: [rabbitmq]
