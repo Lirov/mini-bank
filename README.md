@@ -1,6 +1,6 @@
 ## Mini Bank - Microservices Skeleton
 
-Minimal microservices demo using FastAPI, Kafka, and Docker Compose.
+Minimal bank microservices project using FastAPI, Kafka, Docker and k8s.
 
 ### Services
 
