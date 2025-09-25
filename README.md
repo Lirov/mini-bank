@@ -17,10 +17,10 @@ Minimal microservices demo using FastAPI, Kafka, and Docker Compose.
 ### Quick Start
 
 1) Start infra and services
-   docker compose up -d
+   ```bash docker compose up -d ```
 
 2) Get a token
-   curl -X POST http://localhost:8000/auth/register -H "Content-Type: application/json" -d '{"username":"u1","password":"p1"}'
+   ```bash curl -X POST http://localhost:8000/auth/register -H "Content-Type: application/json" -d '{"username":"u1","password":"p1"}' ```
 
 3) Create an account
    curl -X POST http://localhost:8001/accounts -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" -d '{"owner_id":"u1"}'
