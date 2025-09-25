@@ -1,19 +1,19 @@
 import os, json, asyncio
 from typing import Optional
-import aio_pika, httpx
+import httpx
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from fastapi import FastAPI
 
 app = FastAPI(title="ledger-service")
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"))
 ACCOUNT_URL = os.getenv("ACCOUNT_URL", "http://account-service:8001")
 INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "internal-dev-token")
 
-connection = channel = exchange = None
+consumer: AIOKafkaConsumer | None = None
+producer: AIOKafkaProducer | None = None
 
-async def process(msg: aio_pika.IncomingMessage):
-    async with msg.process():
-        data = json.loads(msg.body.decode())
+async def process_record(data: dict):
         if data.get("type") != "transaction.initiated":
             return
 
@@ -42,20 +42,31 @@ async def process(msg: aio_pika.IncomingMessage):
         await publish("transaction.completed", {"tx_id": tx_id, "source": src, "target": dst, "amount": amount})
 
 async def publish(key: str, payload: dict):
-    global exchange
-    await exchange.publish(aio_pika.Message(body=json.dumps({"type": key, **payload}).encode()), routing_key=key)
+    assert producer is not None
+    await producer.send_and_wait(key, json.dumps({"type": key, **payload}).encode())
 
 @app.on_event("startup")
 async def start():
-    global connection, channel, exchange
-    connection = await aio_pika.connect_robust(RABBITMQ_URL)
-    channel = await connection.channel()
-    exchange = await channel.declare_exchange("bank", aio_pika.ExchangeType.TOPIC)
-    q = await channel.declare_queue("transactions", durable=True)
-    await q.bind(exchange, routing_key="transaction.initiated")
-    await q.consume(process)
+    global consumer, producer
+    producer = AIOKafkaProducer(bootstrap_servers=KAFKA_BROKERS)
+    await producer.start()
+    consumer = AIOKafkaConsumer(
+        "transaction.initiated",
+        bootstrap_servers=KAFKA_BROKERS,
+        enable_auto_commit=True,
+        value_deserializer=lambda v: json.loads(v.decode()),
+        group_id="ledger-service"
+    )
+    await consumer.start()
+    async def _consume():
+        assert consumer is not None
+        async for msg in consumer:
+            await process_record(msg.value)
+    asyncio.create_task(_consume())
 
 @app.on_event("shutdown")
 async def stop():
-    if connection:
-        await connection.close()
+    if consumer:
+        await consumer.stop()
+    if producer:
+        await producer.stop()

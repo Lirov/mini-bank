@@ -1,28 +1,35 @@
-import os, json, aio_pika
+import os, json
 from fastapi import FastAPI
+from aiokafka import AIOKafkaConsumer
 
 app = FastAPI(title="notification-service")
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"))
 
-connection = channel = exchange = None
+consumer: AIOKafkaConsumer | None = None
 
-async def process(msg: aio_pika.IncomingMessage):
-    async with msg.process():
-        data = json.loads(msg.body.decode())
-        print("[NOTIFY]", data, flush=True)
+async def process_record(data: dict):
+    print("[NOTIFY]", data, flush=True)
 
 @app.on_event("startup")
 async def start():
-    global connection, channel, exchange
-    connection = await aio_pika.connect_robust(RABBITMQ_URL)
-    channel = await connection.channel()
-    exchange = await channel.declare_exchange("bank", aio_pika.ExchangeType.TOPIC)
-    for key in ["transaction.completed", "transaction.rejected"]:
-        q = await channel.declare_queue(key, durable=True)
-        await q.bind(exchange, routing_key=key)
-        await q.consume(process)
+    global consumer
+    consumer = AIOKafkaConsumer(
+        "transaction.completed",
+        "transaction.rejected",
+        bootstrap_servers=KAFKA_BROKERS,
+        enable_auto_commit=True,
+        value_deserializer=lambda v: json.loads(v.decode()),
+        group_id="notification-service"
+    )
+    await consumer.start()
+    async def _consume():
+        assert consumer is not None
+        async for msg in consumer:
+            await process_record(msg.value)
+    import asyncio
+    asyncio.create_task(_consume())
 
 @app.on_event("shutdown")
 async def stop():
-    if connection:
-        await connection.close()
+    if consumer:
+        await consumer.stop()

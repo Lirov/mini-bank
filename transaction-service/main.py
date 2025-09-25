@@ -3,25 +3,19 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 from jose import jwt
-import aio_pika
+from aiokafka import AIOKafkaProducer
 
 app = FastAPI(title="transaction-service")
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"))
 JWT_SECRET = os.getenv("JWT_SECRET", "devsecret")
 ALGO = "HS256"
 
-connection: aio_pika.RobustConnection = None
-channel: aio_pika.abc.AbstractChannel = None
-exchange: aio_pika.Exchange = None
+producer: AIOKafkaProducer | None = None
 
 async def startup():
-    global connection, channel, exchange
-    connection = await aio_pika.connect_robust(RABBITMQ_URL)
-    channel = await connection.channel()
-    exchange = await channel.declare_exchange("bank", aio_pika.ExchangeType.TOPIC)
-    # Ensure queues exist (ledger, notifications)
-    q = await channel.declare_queue("transactions", durable=True)
-    await q.bind(exchange, routing_key="transaction.initiated")
+    global producer
+    producer = AIOKafkaProducer(bootstrap_servers=KAFKA_BROKERS)
+    await producer.start()
 
 @app.on_event("startup")
 async def on_start():
@@ -29,8 +23,8 @@ async def on_start():
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    if connection:
-        await connection.close()
+    if producer:
+        await producer.stop()
 
 def get_user(auth: Optional[str] = Header(default=None, alias="Authorization")) -> str:
     if not auth or not auth.lower().startswith("bearer "):
@@ -60,8 +54,6 @@ async def transfer(body: TransferIn, user=Depends(get_user), idempotency_key: Op
         "amount": body.amount,
         "initiated_by": user
     }
-    await exchange.publish(
-        aio_pika.Message(body=json.dumps(message).encode(), content_type="application/json", delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
-        routing_key="transaction.initiated"
-    )
+    assert producer is not None
+    await producer.send_and_wait("transaction.initiated", json.dumps(message).encode())
     return {"accepted": True, "tx_id": tx_id}

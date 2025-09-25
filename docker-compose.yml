@@ -1,49 +1,114 @@
-version: "3.9"
+version: "3.8"
+
 services:
-  postgres:
-    image: postgres:16
+  zookeeper:
+    image: bitnami/zookeeper:3.9
+    container_name: zookeeper
     environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: accounts
-    ports: ["5432:5432"]
-  rabbitmq:
-    image: rabbitmq:3-management
+      - ALLOW_ANONYMOUS_LOGIN=yes
     ports:
-      - "5672:5672"
-      - "15672:15672"  # mgmt UI
+      - "2181:2181"
+    networks:
+      - bank-mini-net
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,PLAINTEXT_HOST://:29092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    networks:
+      - bank-mini-net
+
   auth-service:
-    build: ./auth-service
+    build:
+      context: ./auth-service
+    container_name: auth-service
     environment:
-      JWT_SECRET: devsecret
-      ACCESS_TOKEN_EXPIRE_MINUTES: 60
-    ports: ["8000:8000"]
-    depends_on: [rabbitmq]
+      - JWT_SECRET=devsecret
+    depends_on:
+      - kafka
+    ports:
+      - "8000:8000"
+    networks:
+      - bank-mini-net
+
   account-service:
-    build: ./account-service
+    build:
+      context: ./account-service
+    container_name: account-service
     environment:
-      JWT_SECRET: devsecret
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/accounts
-      INTERNAL_TOKEN: internal-dev-token
-    ports: ["8001:8001"]
-    depends_on: [postgres]
+      - JWT_SECRET=devsecret
+      - INTERNAL_TOKEN=internal-dev-token
+      - DATABASE_URL=sqlite:////data/accounts.db
+    volumes:
+      - account_data:/data
+    depends_on:
+      - kafka
+    ports:
+      - "8001:8001"
+    networks:
+      - bank-mini-net
+
   transaction-service:
-    build: ./transaction-service
+    build:
+      context: ./transaction-service
+    container_name: transaction-service
     environment:
-      JWT_SECRET: devsecret
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-    ports: ["8002:8002"]
-    depends_on: [rabbitmq]
+      - JWT_SECRET=devsecret
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - kafka
+    ports:
+      - "8002:8002"
+    networks:
+      - bank-mini-net
+
   ledger-service:
-    build: ./ledger-service
+    build:
+      context: ./ledger-service
+    container_name: ledger-service
     environment:
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      ACCOUNT_URL: http://account-service:8001
-      INTERNAL_TOKEN: internal-dev-token
-    ports: ["8003:8003"]
-    depends_on: [rabbitmq, account-service]
+      - JWT_SECRET=devsecret
+      - INTERNAL_TOKEN=internal-dev-token
+      - ACCOUNT_URL=http://account-service:8001
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - kafka
+      - account-service
+    ports:
+      - "8003:8003"
+    networks:
+      - bank-mini-net
+
   notification-service:
-    build: ./notification-service
+    build:
+      context: ./notification-service
+    container_name: notification-service
     environment:
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-    ports: ["8004:8004"]
-    depends_on: [rabbitmq]
+      - JWT_SECRET=devsecret
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - kafka
+    # Container listens on 8003; map to 8004 on host to avoid clash
+    ports:
+      - "8004:8003"
+    networks:
+      - bank-mini-net
+
+networks:
+  bank-mini-net:
+    name: bank-mini-net
+
+volumes:
+  account_data:
+
