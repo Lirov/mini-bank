@@ -6,8 +6,8 @@ from sqlmodel import select, SQLModel, Session
 from pydantic import BaseModel
 from jose import jwt
 
-from .db import init_db, get_session
-from .models import Account, LedgerEntry
+from db import init_db, get_session
+from models import Account, LedgerEntry
 
 app = FastAPI(title="account-service")
 init_db()
